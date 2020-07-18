@@ -1,0 +1,286 @@
+#!/usr/local/bin/bash
+ 
+mainMenu() {
+ TMPFILE=`mktemp tmp.XXXXX`
+ dialog --title "SYS INFO" --clear  --menu "" 40 80 35 \
+ 1 "CPU INFO" 2 "MEMORY INFO" 3 "NETWORK INFO" 4 "FILE BROWSER" 5 "CPU Usage" 2>${TMPFILE}
+ result=$?
+ if [ "$result" -eq 0 ] ; then
+	 option=`cat "$TMPFILE"`
+	 rm $TMPFILE
+	 if [ "$option" -eq 1 ] ; then
+		 cpuInfo
+	 elif [ "$option" -eq 2 ] ; then
+		 memInfo
+	 elif [ "$option" -eq 3 ] ; then
+		 netInfo
+	 elif [ "$option" -eq 4 ] ; then
+		 currentDir=`pwd`
+		 currentDir=`echo /usr$currentDir`
+		 fileInfo $currentDir
+	 elif [ "$option" -eq 5 ] ; then
+		 cpuUsage
+         fi
+ elif [ "$result" -eq 1 ] ; then
+	 rm $TMPFILE
+	 return 0
+ elif [ "$result" -eq 255 ] ; then
+	 rm $TMPFILE
+	 return 255
+ fi
+
+}
+
+cpuInfo() {
+ model=`sysctl -n hw.model`
+ machine=`sysctl -n hw.machine`
+ ncpu=`sysctl -n hw.ncpu` 
+ dialog --title "CPU Info" --clear --msgbox \
+ "CPU Model: ${model}\nCPU Machine: ${machine}\nCPU Core: ${ncpu}\n" 40 80
+ result=$?
+ if [ "$result" -eq 0 ] ; then
+	 mainMenu
+ elif [ "$result" -eq 255 ] ; then
+	 mainMenu
+ fi
+ 
+}
+
+getMemInfo() {
+ totalMem=`sysctl -n hw.physmem`
+ pagesize=`sysctl -n hw.pagesize`
+ memInactive=`sysctl -n vm.stats.vm.v_inactive_count`
+ memCache=`sysctl -n vm.stats.vm.v_cache_count`
+ memFree=`sysctl -n vm.stats.vm.v_free_count`
+ memInactive=$(( $memInactive * $pagesize )) 
+ memCache=$(( $memCache * $pagesize ))
+ memFree=$(( $memFree * $pagesize ))
+ memAvail=$(( $memInactive + $memCache +  $memFree ))
+ memUsed=$(( $totalMem - $memAvail ))
+ percent=$(( $memUsed *100 / $totalMem ))
+ return $percent
+}
+
+memInfo() {
+ totalMem=`sysctl -n hw.physmem`
+ pagesize=`sysctl -n hw.pagesize`
+ memInactive=`sysctl -n vm.stats.vm.v_inactive_count`
+ memCache=`sysctl -n vm.stats.vm.v_cache_count`
+ memFree=`sysctl -n vm.stats.vm.v_free_count`
+ memInactive=$(( $memInactive * $pagesize )) 
+ memCache=$(( $memCache * $pagesize ))
+ memFree=$(( $memFree * $pagesize ))
+ memAvail=$(( $memInactive + $memCache +  $memFree ))
+ memUsed=$(( $totalMem - $memAvail ))
+ percent=$(( $memUsed *100 / $totalMem ))
+ 
+ totalMem=`echo $totalMem | awk '/[0-9]/ {value=$1;count=0;while(value >= 1024) {value/=1024; count++};  
+	 print value" "; if(count==0) print "B"; if(count==1) print "KB"; if (count==2) print "MB"; if(count==3) print "GB"; if(count==4) print "TB"}'`
+ memUsed=`echo $memUsed | awk '/[0-9]/ {value=$1;count=0;while(value >= 1024) {value/=1024; count++}; 
+	 print value" "; if(count==0) print "B"; if(count==1) print "KB"; if (count==2) print "MB"; if(count==3) print "GB"; if(count==4) print "TB"}'`
+ memAvail=`echo $memAvail | awk '/[0-9]/ {value=$1;count=0;while(value >= 1024) {value/=1024; count++};  
+	 print value" "; if(count==0) print "B"; if(count==1) print "KB"; if (count==2) print "MB"; if(count==3) print "GB"; if(count==4) print "TB"}'`
+ 
+ enter=`echo -e "\n"`
+ IFS=
+ while true ; do 
+ 	read -s -t 0.1 -n 1 input; 
+	if [ "$input" == "$enter" -a $? -lt 128 ] ; then 
+		break; 
+	fi; 
+ getMemInfo
+ echo $? 
+ done |  dialog --title "Memory Info and Usage" --clear  \
+ --gauge "Total: ${totalMem}\nUsed: ${memUsed}\nFree: ${memAvail}\n" 40 80
+ IFS=" "
+ mainMenu
+}
+
+netInfo() {
+ interFaceArray=()
+ TMPFILE=`mktemp tmp.XXXXXX`
+ TMPFILE2=`mktemp tmp.XXXXX`
+ ifconfig -l | xargs -n1 echo >> ${TMPFILE2}
+ while IFS= read -r line; do
+	 interFaceArray+=($line)
+ done < ${TMPFILE2}
+ rm ${TMPFILE2}
+ IFS=" "
+ interface=`ifconfig -l | awk '{count = 1; while(count <= NF){printf count" "$count" " ;count++;};}'` 
+ dialog --title "Network Info" --clear --no-tags --menu "" 40 80 35 $interface 2>${TMPFILE}
+ result=$?
+ if [ "$result" -eq 0 ] ; then
+	 option=`cat $TMPFILE`
+	 rm ${TMPFILE}
+	 option=$(( $option - 1 ))
+	 printNetInfo ${interFaceArray[$option]}
+ elif [ "$result" -eq 1 ] ; then
+	 rm ${TMPFILE} 
+	 mainMenu
+ elif [ "$result" -eq 255 ] ; then
+	 rm ${TMPFILE}
+	 mainMenu
+ fi
+ 
+}
+
+printNetInfo() {
+ ip=`ifconfig $1 | sed '/inet6/d' | grep inet | awk '{print $2}'`
+ mask=`ifconfig $1 | grep netmask | awk '{print $4}'`
+ mac=`ifconfig $1 | grep ether | awk '{print $2}'`
+ dialog --title "Interface Name: $1" --clear --msgbox \
+ "IPv4__: $ip\nNetmask: $mask\nMac: $mac" 40 80
+ result=$?
+ if [ $result -eq 0 ] ; then
+	 netInfo
+ elif [ $result -eq 255 ] ; then
+	 netInfo
+ fi
+
+}
+
+# $1 => currentDir
+fileInfo() {
+ fileArray=()
+ mimeArray=()
+ TMPFILE=`mktemp tmp.XXXXX`
+ TMPFILE2=`mktemp tmp.XXXXX`
+ TMPFILE3=`mktemp tmp.XXXXX`
+ 
+ if [ $1 == "/" ] ; then
+	ls -a $1 | sed '/tmp*/d' | sed '/\.\./d' >> ${TMPFILE2}
+ else
+	 ls -a $1 | sed '/tmp*/d' >> ${TMPFILE2}
+ fi
+ while IFS= read -r line; do
+	nowFile=`echo $1"/"$line`
+        fileArray+=($line)
+        mime=`file --mime-type $nowFile | awk '{print $2}'`
+        mimeArray+=($mime)
+        echo $line $mime >> ${TMPFILE3}
+ done < ${TMPFILE2}
+ rm ${TMPFILE2}
+ IFS=" "
+ files=`cat ${TMPFILE3} | xargs echo | awk '{count=1;optionCount=1; while(count <= NF){printf optionCount" "$count;count++;printf "?"$count" ";count++;optionCount++;};}'`
+ dialog --title "$1" --clear --no-tags --column-separator "?" --menu "" 40 80 35 \
+ $files  2>${TMPFILE}
+ result=$?
+ rm ${TMPFILE3}
+ if [ "$result" -eq 0 ] ; then
+	 option=`cat $TMPFILE`
+	 rm ${TMPFILE}
+ 	 option=$(( $option - 1 ))
+	 if [ $1 == "/" ] ; then
+		 next=`echo "/"${fileArray[$option]}`
+	 else
+ 	 	next=`echo $1"/"${fileArray[$option]}`
+	 fi 
+ 	 if [ -d $next ] ; then
+	 	if [ ${fileArray[$option]} == . ] ; then
+ 			fileInfo $1
+		elif [ ${fileArray[$option]} == .. ] ; then
+			if [ $1 == "/usr" ] ; then
+				fileInfo "/"
+			else
+				upLevel=`echo $1 | awk 'BEGIN {FS="\/"} {count=1; while(count < NF-1) {printf $count"\/";count++};printf $count}'`
+				fileInfo $upLevel
+			fi
+		else
+			#nextDir=`echo $1 ${fileArray[$option]} | awk '{print $1"\/"$2}'`
+			fileInfo $next
+			
+		fi
+	 else
+		printFileInfo $next ${fileArray[$option]} $1
+	 fi
+ elif [ "$result" -eq 1 ] ; then
+	 rm ${TMPFILE}
+	 mainMenu
+ elif [ "$result" -eq 255 ] ; then
+	 rm ${TMPFILE}
+	 mainMenu
+ fi
+
+}
+#$1=>full file path $2=>file name $3=> current file path
+printFileInfo() {
+ info=`file $1 | awk 'BEGIN {FS=":"} {print $2}'`
+ size=`stat $1 | awk '{print $8}'`
+ size=`echo $size | awk '/[0-9]/ {value=$1;count=0;while(value >= 1024) {value/=1024; count++};  
+	 print value" "; if(count==0) print "B"; if(count==1) print "KB"; if (count==2) print "MB"; if(count==3) print "GB"; if(count==4) print "TB"}'`
+ text=`file $1  | awk '{count=1; while(count <= NF) {if($count == "text") print "text";count++;};}'`
+ if [ "$text" == "text" ] ; then
+	 dialog --title "" --clear --yes-label "OK" --no-label "Edit" --yesno "File Name: $2\nFile Info: $info\nFile Size: $size" 40 80 
+	 result=$?
+	 if [ $result -eq 0 ] ; then
+		 fileInfo $3
+	 elif [ $result -eq 1 ] ; then
+		 $EDITOR $1
+		 printFileInfo $1 $2 $3
+	 elif [ $result -eq 255 ] ; then
+		 fileInfo $3
+	 fi
+ else
+ 	 dialog --title "" --clear --msgbox "File Name: $2\nFile Info: $info\nFile Size: $size" 40 80
+	 if [ $result -eq 0 ] ; then
+		 fileInfo $3
+	 elif [ $result -eq 255 ] ; then
+		 fileInfo $3
+	 fi
+
+ fi
+}
+
+cpuUsage() {
+ TMPFILE=`mktemp tmp.XXXXX`
+ TMPFILE2=`mktemp tmp.XXXXX`
+ TMPFILE3=`mktemp tmp.XXXXX`
+ TMPFILE4=`mktemp tmp.XXXXXX`
+ ncpu=`sysctl -n hw.ncpu`
+ top -P -d 2 -s 0.5>> ${TMPFILE4}
+ cat ${TMPFILE4}| grep CPU | sed -n -e "1,${ncpu}d" -e '/^CPU/p' | awk '{print $3}' >> ${TMPFILE}
+ cat ${TMPFILE4}| grep CPU | sed -n -e "1,${ncpu}d" -e '/^CPU/p' | awk '{print $7}' >> ${TMPFILE2}
+ cat ${TMPFILE4}| grep CPU | sed -n -e "1,${ncpu}d" -e '/^CPU/p' | awk '{print $11}' >> ${TMPFILE3}
+ rm ${TMPFILE4}
+ usr=()
+ system=()
+ idle=()
+ while IFS= read -r line; do
+        usr+=($line)  
+ done < ${TMPFILE}
+ rm ${TMPFILE}
+ while IFS= read -r line; do
+        system+=($line)  
+ done < ${TMPFILE2}
+ rm ${TMPFILE2}
+ while IFS= read -r line; do
+        idle+=($line)  
+ done < ${TMPFILE3}
+ rm ${TMPFILE3}
+ loading=""
+ i=0
+ while [ $i -lt $ncpu ] ; do
+	 loading="${loading}CPU${i}: USER: ${usr[$i]} SYST: ${system[$i]} IDLE: ${idle[$i]} \n"
+	 i=$(( $i + 1 ))
+ done
+ enter=`echo -e "\n"`
+ IFS=
+ while true ; do 
+ 	read -s -t 0.1 -n 1 input; 
+	if [ "$input" == "$enter" -a $? -lt 128 ] ; then 
+		break; 
+	fi; 
+ totalIdle=`top -P -d 2 -s 0.5| grep CPU | sed -n -e "1,${ncpu}d" -e '/^CPU/p' | awk '{print $11}' | awk 'BEGIN {FS="%"} {print $1}' | awk 'BEGIN {total = 0} {total = total + $1} END {print total}' | awk '{FS="."} { print $1}'`
+ sum=$(( $ncpu * 100 ))
+ sum=$(( $sum - $totalIdle ))
+ result=$(( $sum / $ncpu ))
+
+ echo $result
+ done |  dialog --title "CPU loading" --clear  \
+ --gauge "$loading" 40 80 
+ IFS=" "
+ mainMenu
+}
+
+trap "rm -rf tmp*; exit 255" 1 2 3 15
+mainMenu
